@@ -2,12 +2,16 @@
 import os, re, cv2, numpy as np, torch
 import torch.nn as nn
 from ultralytics import YOLO
-import ultralytics  # لطباعة النسخة
+import ultralytics  # print version
 
-# ===== إعدادات افتراضية =====
+# --- Limit Torch threads to reduce RAM/CPU thrash ---
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
+# ===== Defaults =====
 DEFAULT_CLASS_NAMES = ["dribble", "pass", "shoot"]
 
-# ===== نموذج الـMLP (34D -> num_classes) =====
+# ===== 34D -> num_classes MLP =====
 class ActionMLP(nn.Module):
     def __init__(self, in_dim=34, hid=128, num_classes=3, dropout=0.25):
         super().__init__()
@@ -19,7 +23,7 @@ class ActionMLP(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# ===== دوال مساعدة =====
+# ===== Helpers =====
 def _natural_key(s: str):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', s)]
 
@@ -39,10 +43,7 @@ def _smooth_probs(arr: np.ndarray, win: int):
     return out
 
 def _feat_from_det(kpts_xyn: np.ndarray, box_xyxy: np.ndarray, H: int, W: int) -> np.ndarray:
-    """
-    يحوّل 17 keypoints بصيغة x,y[,v] → 34D normalized داخل صندوق اللاعب.
-    الكيبوينتس هنا متوقعة "xyn" (نسبية 0..1) من YOLO Pose.
-    """
+    """17 keypoints xyn -> 34D normalized inside player's box."""
     k = np.asarray(kpts_xyn, dtype=np.float32)
     if k.ndim != 2 or k.shape[0] != 17:
         return np.zeros((34,), np.float32)
@@ -52,7 +53,6 @@ def _feat_from_det(kpts_xyn: np.ndarray, box_xyxy: np.ndarray, H: int, W: int) -
     else:
         xy, v = k[:, :2], k[:, 2:3]
 
-    # إلى إحداثيات مطلقة
     xy[:, 0] *= W
     xy[:, 1] *= H
 
@@ -68,52 +68,38 @@ def _feat_from_det(kpts_xyn: np.ndarray, box_xyxy: np.ndarray, H: int, W: int) -
     feat = np.nan_to_num(feat, nan=0.0, posinf=0.0, neginf=0.0)
     return feat.reshape(-1).astype(np.float32)
 
-# ===== غلاف آمن لاستدعاء YOLO (Callable ثم fallback إلى .predict) =====
+# ===== Safe YOLO call wrapper =====
 def yolo_infer(model: YOLO, img, conf: float, imgsz: int, max_det: int):
-    """
-    يحاول أولاً استدعاء النموذج ككائن Callable.
-    إذا فشل (بسبب اختلاف نسخة/تنفيذ)، يرجع تلقائياً إلى model.predict(...).
-    """
     try:
-        # النداء الحديث الموصى به
         return model(img, conf=conf, imgsz=imgsz, verbose=False, max_det=max_det)
-    except Exception as e_callable:
-        # fallback موثوق مع إصدارات قديمة/مختلفة
+    except Exception:
         return model.predict(img, conf=conf, imgsz=imgsz, save=False, verbose=False, max_det=max_det)
 
-# ===== الدالة الرئيسية: ترجيع عدّادات الأكشن فقط =====
+# ===== Main API: return counts only =====
 def infer_action_counts(
     crops_dir: str,
     pose_weights: str,
     mlp_weights: str,
     class_names=None,
-    conf_threshold: float = 0.75,   # تجاهل التنبؤات الأضعف
+    conf_threshold: float = 0.75,
     yolo_conf: float = 0.25,
     img_size: int = 736,
     max_det: int = 5,
-    smooth_window: int = 7,         # تنعيم احتمالات
-    min_seg_sec: float = 0.30,      # أقصر مدة للمقطع المعتمد
-    fps: float = 25.0               # FPS المعتمد لحساب المدة
+    smooth_window: int = 7,
+    min_seg_sec: float = 0.30,
+    fps: float = 25.0
 ):
-    """
-    يقرأ صور القصّ من المجلد، يستخرج pose، يصنّف بـMLP، ينعّم الاحتمالات،
-    ويبني مقاطع ثم يعيد عدد المقاطع لكل أكشن فقط.
-    """
-    # طباعة معلومات النسخة للتشخيص
     print(f"[infer_action_counts] ultralytics version: {ultralytics.__version__}")
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     classes = class_names if class_names else DEFAULT_CLASS_NAMES
 
-    # تحقق من المسارات
     if not os.path.isdir(crops_dir):
-        raise FileNotFoundError(f"لم يتم العثور على مجلد القصّات: {crops_dir}")
+        raise FileNotFoundError(f"Missing crops_dir: {crops_dir}")
     if not os.path.isfile(pose_weights):
-        raise FileNotFoundError(f"لم يتم العثور على وزن الـPose: {pose_weights}")
+        raise FileNotFoundError(f"Missing pose weights: {pose_weights}")
     if not os.path.isfile(mlp_weights):
-        raise FileNotFoundError(f"لم يتم العثور على وزن الـMLP: {mlp_weights}")
+        raise FileNotFoundError(f"Missing MLP weights: {mlp_weights}")
 
-    # حمّل النماذج
     yolo_pose = YOLO(pose_weights)
     mlp = ActionMLP(num_classes=len(classes)).to(device)
     sd = torch.load(mlp_weights, map_location=device)
@@ -122,8 +108,7 @@ def infer_action_counts(
     mlp.load_state_dict(sd, strict=False)
     mlp.eval()
 
-    # خريطة النتائج المرحلية
-    records = []  # كل عنصر: (frame_idx, probs[3], pred_label or 'no_action')
+    records = []
     image_paths = sorted(
         [os.path.join(crops_dir, f) for f in os.listdir(crops_dir)
          if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp'))],
@@ -135,26 +120,23 @@ def infer_action_counts(
         if img is None:
             continue
 
-        # استدلال YOLO Pose عبر الغلاف الآمن
         results = yolo_infer(yolo_pose, img, conf=yolo_conf, imgsz=img_size, max_det=max_det)
         r = results[0]
 
         if r.boxes is None or r.keypoints is None or len(r.boxes) == 0:
-            # لا يوجد كشف في هذا الإطار
             continue
 
         boxes = r.boxes.xyxy.cpu().numpy()
         kpts  = r.keypoints.xyn.cpu().numpy()
         confs = r.boxes.conf.cpu().numpy()
 
-        # خذ أعلى صندوق
         det_idx = int(np.argmax(confs))
         feat = _feat_from_det(kpts[det_idx], boxes[det_idx], img.shape[0], img.shape[1])
 
         with torch.no_grad():
             x = torch.from_numpy(feat[None, :]).to(device)
             logits = mlp(x)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]  # [num_classes]
+            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
 
         max_conf = float(np.max(probs))
         pred_idx = int(np.argmax(probs))
@@ -166,25 +148,20 @@ def infer_action_counts(
         records.append((frame_idx, probs, pred_name))
 
     if not records:
-        # لا يوجد أي استدلال صالح
         return {c: 0 for c in classes}
 
-    # رتّب زمنياً
     records.sort(key=lambda t: t[0])
-    # أبقِ فقط الإطارات المقبولة (بدون no_action)
     valid = [(fi, p) for (fi, p, name) in records if name != "no_action"]
     if not valid:
         return {c: 0 for c in classes}
 
     frame_idx_arr = np.array([fi for fi, _ in valid], dtype=np.int32)
-    probs_arr     = np.stack([p for _, p in valid], axis=0)  # [N, C]
+    probs_arr     = np.stack([p for _, p in valid], axis=0)
 
-    # تنعيم
     probs_smooth = _smooth_probs(probs_arr, win=smooth_window)
     smooth_idx   = np.argmax(probs_smooth, axis=1)
     smooth_labels = [classes[i] for i in smooth_idx]
 
-    # بناء المقاطع (حسب تغيّر اللايبل بعد التنعيم)
     segments = []
     cur_label = smooth_labels[0]
     cur_start = int(frame_idx_arr[0])
@@ -200,13 +177,11 @@ def infer_action_counts(
             cur_label = lab
             cur_start = idx
 
-    # آخر مقطع
     cur_end = int(frame_idx_arr[-1])
     dur = (cur_end - cur_start + 1) / float(fps)
     if dur >= min_seg_sec:
         segments.append((cur_label, cur_start, cur_end, round(dur, 2)))
 
-    # عدّ المقاطع لكل أكشن
     counts = {c: 0 for c in classes}
     for (lab, _, _, _) in segments:
         if lab in counts:
