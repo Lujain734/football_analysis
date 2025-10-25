@@ -98,6 +98,7 @@ class Tracker:
                     tracks["ball"][frame_num][1] = {"bbox":bbox}
 
         if stub_path is not None:
+            os.makedirs(os.path.dirname(stub_path), exist_ok=True)
             with open(stub_path,'wb') as f:
                 pickle.dump(tracks,f)
 
@@ -207,3 +208,4 @@ class Tracker:
             output_video_frames.append(frame)
 
         return output_video_frames
+
