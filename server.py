@@ -182,7 +182,7 @@ def analyze_video():
         cmd = [
             sys.executable, main_script,
             "--video-path", video_path,
-            "--target-xy", str(x), str(y),     # pixel coords
+            "--target-xy", str(x), str(y),
             "--crop-dir", crops_dir,
             "--pose-weights", POSE_WEIGHTS,
             "--mlp-weights", MLP_WEIGHTS,
@@ -192,7 +192,8 @@ def analyze_video():
             "--img-size", "736",
             "--max-det", "5",
             "--smooth-window", "7",
-            "--min-seg-sec", "0.30"
+            "--min-seg-sec", "0.30",
+            "--iou-thr", "0.15" # <-- ADD THIS LINE (Experiment with 0.1, 0.15, 0.2)
         ]
         print(f"🚀 Running: {' '.join(cmd)}")
 
