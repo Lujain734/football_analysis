@@ -3,7 +3,7 @@
 Haddaf Backend Server - Football Action Recognition
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from huggingface_hub import hf_hub_download
 import os
@@ -23,6 +23,7 @@ HF_REPO_ID = "lujain-721/haddaf-models"  # ✅ حسابك في Hugging Face
 # ===== إعدادات المسارات =====
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
+DEBUG_DIR = os.path.join(BASE_DIR, "debug_output")  # 🔥 إضافة جديدة
 
 # المودلات المطلوبة
 DETECTION_WEIGHTS = os.path.join(MODELS_DIR, "best.pt")
@@ -65,6 +66,9 @@ def ensure_models_downloaded():
 print("🔍 Checking models...")
 ensure_models_downloaded()
 
+# إنشاء مجلد debug_output 🔥 إضافة جديدة
+os.makedirs(DEBUG_DIR, exist_ok=True)
+
 # ===== API Endpoints =====
 
 @app.route('/', methods=['GET'])
@@ -76,7 +80,8 @@ def home():
         'status': 'running',
         'endpoints': {
             '/health': 'Check server status',
-            '/analyze': 'Analyze football video (POST)'
+            '/analyze': 'Analyze football video (POST)',
+            '/view-crops/current': 'View crop images in browser'  # 🔥 إضافة جديدة
         }
     })
 
@@ -95,6 +100,158 @@ def health_check():
         'models': models_status,
         'python_version': sys.version
     })
+
+# 🔥 Endpoint جديد: عرض صورة واحدة
+@app.route('/crops/current/<path:filename>')
+def serve_crop(filename):
+    """عرض صورة معينة"""
+    crops_path = os.path.join(DEBUG_DIR, 'current', 'crops')
+    return send_from_directory(crops_path, filename)
+
+# 🔥 Endpoint جديد: عرض كل الصور في HTML
+@app.route('/view-crops/current')
+def view_crops():
+    """عرض كل الصور في صفحة HTML"""
+    crops_path = os.path.join(DEBUG_DIR, 'current', 'crops')
+    
+    if not os.path.exists(crops_path):
+        return f"<h1>❌ No crops folder found</h1><p>{crops_path}</p>", 404
+    
+    # قائمة الصور
+    images = sorted([f for f in os.listdir(crops_path) 
+                    if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+    
+    if not images:
+        return f"<h1>⚠️ No images found</h1><p>{crops_path}</p>", 404
+    
+    # HTML بسيط وجميل
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Target Player Crops</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{ 
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+                padding: 20px; 
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                color: white;
+                min-height: 100vh;
+            }}
+            .header {{
+                text-align: center;
+                margin-bottom: 40px;
+                padding: 30px;
+                background: rgba(255,255,255,0.05);
+                border-radius: 15px;
+                backdrop-filter: blur(10px);
+            }}
+            h1 {{ 
+                color: #4CAF50; 
+                font-size: 2.5em;
+                margin-bottom: 10px;
+                text-shadow: 0 2px 10px rgba(76, 175, 80, 0.3);
+            }}
+            .stats {{
+                display: flex;
+                justify-content: center;
+                gap: 30px;
+                margin-top: 20px;
+            }}
+            .stat {{
+                background: rgba(76, 175, 80, 0.1);
+                padding: 15px 30px;
+                border-radius: 10px;
+                border: 2px solid rgba(76, 175, 80, 0.3);
+            }}
+            .stat-value {{
+                font-size: 2em;
+                font-weight: bold;
+                color: #4CAF50;
+            }}
+            .stat-label {{
+                color: #aaa;
+                margin-top: 5px;
+            }}
+            .grid {{ 
+                display: grid; 
+                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); 
+                gap: 25px;
+                margin-top: 30px;
+            }}
+            .item {{ 
+                background: rgba(255,255,255,0.08);
+                padding: 15px;
+                border-radius: 12px;
+                text-align: center;
+                transition: transform 0.3s, box-shadow 0.3s;
+                border: 1px solid rgba(255,255,255,0.1);
+            }}
+            .item:hover {{
+                transform: translateY(-5px);
+                box-shadow: 0 10px 30px rgba(76, 175, 80, 0.3);
+                border-color: rgba(76, 175, 80, 0.5);
+            }}
+            img {{ 
+                width: 100%;
+                height: 280px;
+                object-fit: cover;
+                border-radius: 8px;
+                border: 2px solid rgba(76, 175, 80, 0.2);
+            }}
+            .filename {{ 
+                margin-top: 12px;
+                font-size: 13px;
+                color: #4CAF50;
+                font-family: 'Courier New', monospace;
+            }}
+            .frame-num {{
+                display: inline-block;
+                background: rgba(76, 175, 80, 0.2);
+                padding: 3px 8px;
+                border-radius: 5px;
+                margin-top: 5px;
+                font-size: 11px;
+                color: #aaa;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>🎯 Target Player Crops</h1>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-value">{len(images)}</div>
+                    <div class="stat-label">Total Frames</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="grid">
+    """
+    
+    for img in images:
+        # استخراج رقم الفريم
+        frame_num = ''.join(filter(str.isdigit, img.split('.')[0]))
+        
+        html += f"""
+            <div class="item">
+                <img src="/crops/current/{img}" alt="{img}" loading="lazy">
+                <div class="filename">{img}</div>
+                <div class="frame-num">Frame #{frame_num}</div>
+            </div>
+        """
+    
+    html += """
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
 
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
@@ -137,19 +294,26 @@ def analyze_video():
         print(f"📹 Received video: {video_file.filename}")
         print(f"📍 Target coordinates: x={x}, y={y}")
         
-        # 2. إنشاء مجلد مؤقت
-        temp_dir = tempfile.mkdtemp(prefix='haddaf_')
-        print(f"📁 Working directory: {temp_dir}")
+        # 2. مجلد ثابت واحد 🔥 التعديل الرئيسي
+        work_dir = os.path.join(DEBUG_DIR, 'current')
+        
+        # امسح المجلد القديم واعمل واحد جديد
+        if os.path.exists(work_dir):
+            shutil.rmtree(work_dir, ignore_errors=True)
+        
+        os.makedirs(work_dir, exist_ok=True)
+        print(f"📁 Working directory: {work_dir}")
         
         try:
             # حفظ الفيديو
-            video_path = os.path.join(temp_dir, 'input_video.mp4')
+            video_path = os.path.join(work_dir, 'input_video.mp4')
             video_file.save(video_path)
             print(f"✅ Video saved: {video_path}")
             
             # مجلد القصّات
-            crops_dir = os.path.join(temp_dir, 'crops')
+            crops_dir = os.path.join(work_dir, 'crops')
             os.makedirs(crops_dir, exist_ok=True)
+            print(f"📸 Crops will be saved to: {crops_dir}")
             
             # 3. تشغيل main.py
             main_script = os.path.join(BASE_DIR, 'main.py')
@@ -213,21 +377,35 @@ def analyze_video():
             
             print(f"✅ Final counts: {action_counts}")
             
-            # 5. إرجاع النتائج
+            # 🔥 عد الصور
+            crop_count = 0
+            if os.path.exists(crops_dir):
+                crop_files = [f for f in os.listdir(crops_dir) 
+                            if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                crop_count = len(crop_files)
+            
+            print(f"📸 Total crops saved: {crop_count}")
+            print(f"🌐 View crops at: /view-crops/current")
+            
+            # 5. إرجاع النتائج 🔥 مع رابط الصور
+            base_url = request.host_url.rstrip('/')
+            crops_url = f"{base_url}/view-crops/current"
+            
             return jsonify({
                 'success': True,
                 'action_counts': action_counts,
                 'target_coordinates': {'x': x, 'y': y},
+                'crops_url': crops_url,  # 🔥 إضافة جديدة
+                'total_crops': crop_count,  # 🔥 إضافة جديدة
                 'timestamp': datetime.now().isoformat()
             })
             
-        finally:
-            # 6. تنظيف الملفات المؤقتة
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                print(f"🧹 Cleaned up: {temp_dir}")
-            except Exception as e:
-                print(f"⚠️  Cleanup warning: {e}")
+        except Exception as e:
+            print(f"❌ Processing error: {str(e)}")
+            print(traceback.format_exc())
+            raise
+            
+        # 🔥 حذفنا الـ finally block اللي كان يمسح الملفات
     
     except Exception as e:
         print(f"❌ Exception: {str(e)}")
@@ -262,6 +440,7 @@ if __name__ == '__main__':
     print("=" * 60)
     print(f"📂 Base directory: {BASE_DIR}")
     print(f"🤖 Models directory: {MODELS_DIR}")
+    print(f"📸 Debug output directory: {DEBUG_DIR}")  # 🔥 إضافة جديدة
     print(f"✅ Detection model: {os.path.exists(DETECTION_WEIGHTS)}")
     print(f"✅ Pose model: {os.path.exists(POSE_WEIGHTS)}")
     print(f"✅ MLP model: {os.path.exists(MLP_WEIGHTS)}")
