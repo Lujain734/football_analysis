@@ -193,7 +193,7 @@ def analyze_video():
             "--max-det", "5",
             "--smooth-window", "7",
             "--min-seg-sec", "0.30",
-            "--iou-thr", "0.15" # <-- ADD THIS LINE (Experiment with 0.1, 0.15, 0.2)
+            "--iou-thr", "0.3" # <-- ADD THIS LINE (Experiment with 0.1, 0.15, 0.2)
         ]
         print(f"🚀 Running: {' '.join(cmd)}")
 
