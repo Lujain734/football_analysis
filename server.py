@@ -1,93 +1,104 @@
 #!/usr/bin/env python3
-"""
-Haddaf Backend Server - Football Action Recognition
-"""
-
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from huggingface_hub import hf_hub_download
-import os
-import sys
-import shutil
-import subprocess
-import traceback
+import os, sys, shutil, subprocess, traceback
 from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
 
 HF_REPO_ID = "lujain-721/haddaf-models"
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 DEBUG_DIR = os.path.join(BASE_DIR, "debug_output")
-
 DETECTION_WEIGHTS = os.path.join(MODELS_DIR, "best.pt")
 POSE_WEIGHTS = os.path.join(MODELS_DIR, "best1.pt")
 MLP_WEIGHTS = os.path.join(MODELS_DIR, "action_mlp.pt")
 
 def ensure_models_downloaded():
-    models_needed = {
-        'best.pt': DETECTION_WEIGHTS,
-        'best1.pt': POSE_WEIGHTS,
-        'action_mlp.pt': MLP_WEIGHTS
-    }
-    
+    models = {'best.pt': DETECTION_WEIGHTS, 'best1.pt': POSE_WEIGHTS, 'action_mlp.pt': MLP_WEIGHTS}
     os.makedirs(MODELS_DIR, exist_ok=True)
-    
-    for model_filename, local_path in models_needed.items():
-        if not os.path.exists(local_path):
-            print(f"Downloading {model_filename}...")
+    for name, path in models.items():
+        if not os.path.exists(path):
+            print(f"Downloading {name}...")
             try:
-                downloaded_path = hf_hub_download(
-                    repo_id=HF_REPO_ID,
-                    filename=model_filename,
-                    cache_dir=None
-                )
-                shutil.copy(downloaded_path, local_path)
-                print(f"Downloaded {model_filename}")
+                dl = hf_hub_download(repo_id=HF_REPO_ID, filename=name, cache_dir=None)
+                shutil.copy(dl, path)
+                print(f"Downloaded {name}")
             except Exception as e:
-                print(f"Error downloading {model_filename}: {e}")
+                print(f"Error: {e}")
                 raise
         else:
-            print(f"{model_filename} exists")
+            print(f"{name} exists")
 
-print("Checking models...")
 ensure_models_downloaded()
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
-@app.route('/', methods=['GET'])
+@app.route('/')
 def home():
-    return jsonify({
-        'service': 'Haddaf Action Recognition API',
-        'version': '1.0',
-        'status': 'running',
-        'endpoints': {
-            '/health': 'Check server status',
-            '/analyze': 'Analyze football video (POST)',
-            '/view-crops/current': 'View crop images in browser'
-        }
-    })
+    return jsonify({'service': 'Haddaf API', 'version': '1.0', 'status': 'running'})
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat()
-    })
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
-@app.route('/crops/current/<path:filename>')
-def serve_crop(filename):
-    crops_path = os.path.join(DEBUG_DIR, 'current', 'crops')
-    return send_from_directory(crops_path, filename)
+@app.route('/crops/current/<path:f>')
+def serve_crop(f):
+    return send_from_directory(os.path.join(DEBUG_DIR, 'current', 'crops'), f)
 
 @app.route('/view-crops/current')
 def view_crops():
-    crops_path = os.path.join(DEBUG_DIR, 'current', 'crops')
-    
-    if not os.path.exists(crops_path):
-        return "<h1>No crops folder found</h1>", 404
-    
+    p = os.path.join(DEBUG_DIR, 'current', 'crops')
+    if not os.path.exists(p): return "<h1>No crops</h1>", 404
+    imgs = sorted([f for f in os.listdir(p) if f.lower().endswith(('.jpg', '.png'))])
+    if not imgs: return "<h1>No images</h1>", 404
+    h = '<html><head><style>body{background:#1a1a2e;color:#fff;padding:20px}img{width:200px;margin:10px;border:2px solid #4CAF50}</style></head><body><h1>Crops</h1>'
+    for i in imgs: h += f'<img src="/crops/current/{i}"><br>'
+    return h + '</body></html>'
+
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    try:
+        if 'video' not in request.files: return jsonify({'success': False, 'error': 'No video'}), 400
+        vf = request.files['video']
+        if not vf.filename: return jsonify({'success': False, 'error': 'Empty'}), 400
+        try:
+            x = float(request.form.get('x', 0))
+            y = float(request.form.get('y', 0))
+        except: return jsonify({'success': False, 'error': 'Invalid coords'}), 400
+        print(f"Video: {vf.filename}, Coords: {x:.3f}, {y:.3f}")
+        wd = os.path.join(DEBUG_DIR, 'current')
+        if os.path.exists(wd): shutil.rmtree(wd, ignore_errors=True)
+        os.makedirs(wd, exist_ok=True)
+        try:
+            vp = os.path.join(wd, 'input_video.mp4')
+            vf.save(vp)
+            cd = os.path.join(wd, 'crops')
+            os.makedirs(cd, exist_ok=True)
+            cmd = [sys.executable, os.path.join(BASE_DIR, 'main.py'), '--video-path', vp, '--target-xy', str(x), str(y), '--crop-dir', cd, '--pose-weights', POSE_WEIGHTS, '--mlp-weights', MLP_WEIGHTS, '--zoom', '1.3', '--crop-size', '224']
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, cwd=BASE_DIR)
+            if r.returncode != 0: return jsonify({'success': False, 'error': 'Failed', 'details': r.stderr[-1000:]}), 500
+            ac = {}
+            for l in r.stdout.strip().split('\n'):
+                if '=' in l:
+                    p = l.split('=')
+                    if len(p) == 2:
+                        try: ac[p[0].strip()] = int(p[1].strip())
+                        except: pass
+            if not ac: ac = {'dribble': 0, 'pass': 0, 'shoot': 0}
+            cc = len([f for f in os.listdir(cd) if f.lower().endswith(('.jpg', '.png'))]) if os.path.exists(cd) else 0
+            cu = f"{request.host_url.rstrip('/')}/view-crops/current"
+            return jsonify({'success': True, 'action_counts': ac, 'target_coordinates': {'x': x, 'y': y}, 'crops_url': cu, 'total_crops': cc, 'timestamp': datetime.now().isoformat()})
+        except Exception as e:
+            print(f"Error: {e}")
+            raise
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)    
     images = sorted([f for f in os.listdir(crops_path) 
                     if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
     
