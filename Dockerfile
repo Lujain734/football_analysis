@@ -1,6 +1,15 @@
 FROM python:3.11-slim
 
-# تحديث وتثبيت المكتبات (أسماء جديدة)
+# --- Reduce memory usage by limiting BLAS/NumPy/Torch threads ---
+ENV OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
+    BLIS_NUM_THREADS=1 \
+    OPENCV_OPENCL_RUNTIME=disabled \
+    MALLOC_ARENA_MAX=2
+
+# System deps for OpenCV, Torch, etc.
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
@@ -20,4 +29,5 @@ COPY . .
 
 EXPOSE 8080
 
-CMD ["gunicorn", "server:app", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "1800"]
+# You can rely on Procfile on Railway; keeping CMD here is also fine.
+CMD ["gunicorn", "server:app", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "2", "--timeout", "1800"]
