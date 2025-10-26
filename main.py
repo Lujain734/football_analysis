@@ -39,7 +39,7 @@ def parse_args():
     parser.add_argument("--conf-thr", type=float, default=0.75,
                         help="Classification confidence threshold for accepting an action")
     parser.add_argument("--yolo-conf", type=float, default=0.25,
-                        help="YOLO pose confidence threshold")
+        help="YOLO pose confidence threshold")
     parser.add_argument("--img-size", type=int, default=736,
                         help="YOLO pose inference image size")
     parser.add_argument("--max-det", type=int, default=5,
@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument("--smooth-window", type=int, default=7,
                         help="Smoothing window length over probabilities")
     parser.add_argument("--min-seg-sec", type=float, default=0.30,
-                        help="Minimum duration (sec) for an action segment to be counted")
+        help="Minimum duration (sec) for an action segment to be counted")
     return parser.parse_args()
 
 # --------------------- Utilities ---------------------
@@ -58,7 +58,8 @@ def calculate_iou(a, b):
     ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
     iw = max(0, ix2 - ix1); ih = max(0, iy2 - iy1)
     inter = iw * ih
-    if inter <= 0: return 0.0
+    if inter <= 0:
+        return 0.0
     area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
     area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
     denom = area_a + area_b - inter
@@ -79,8 +80,10 @@ def enlarge_bbox(bbox, zoom=2.7, W=None, H=None, pad_px=40):
     ny1 = int(clamp(cy - nh / 2, 0, H - 1))
     nx2 = int(clamp(cx + nw / 2, 0, W - 1))
     ny2 = int(clamp(cy + nh / 2, 0, H - 1))
-    if nx2 <= nx1: nx2 = min(W - 1, nx1 + 1)
-    if ny2 <= ny1: ny2 = min(H - 1, ny1 + 1)
+    if nx2 <= nx1:
+        nx2 = min(W - 1, nx1 + 1)
+    if ny2 <= ny1:
+        ny2 = min(H - 1, ny1 + 1)
     return [nx1, ny1, nx2, ny2]
 
 def point_in_bbox_with_margin(px, py, bbox, margin=20):
@@ -91,24 +94,22 @@ def point_in_bbox_with_margin(px, py, bbox, margin=20):
 def seed_target_from_first_k_frames(tracks_players, target_xy, K=15, contain_margin=24, nearest_max_radius=120):
     """
     يختار ID اللاعب بالتصويت عبر أول K فريمات:
-    1) أولاً من تحتوي إحداثيات النقرة داخل صندوقه (مع هامش).
-    2) إن لم يوجد، أقرب مركز ضمن نصف قطر معقول.
+    1) أولوية لمن يحتوي صندوقه النقطة (مع هامش).
+    2) إن لم يوجد، أقرب مركز ضمن نصف قطر منطقي.
     """
     if target_xy is None:
         return None, None, None
 
     tx, ty = target_xy
-    votes = {}          # pid -> count
-    nearest_votes = {}  # pid -> count (في حالة عدم الاحتواء)
+    votes = {}          # pid -> count (containment)
+    nearest_votes = {}  # pid -> count (nearest-center)
 
     max_f = min(K, len(tracks_players))
-
     for f_idx in range(max_f):
         frame_players = tracks_players[f_idx]
-        if not frame_players: 
+        if not frame_players:
             continue
 
-        # 1) ابحث عن أي صندوق يحتوي النقطة (مع هامش)
         contained_pids = []
         for pid, tr in frame_players.items():
             if point_in_bbox_with_margin(tx, ty, tr["bbox"], margin=contain_margin):
@@ -117,9 +118,9 @@ def seed_target_from_first_k_frames(tracks_players, target_xy, K=15, contain_mar
         if contained_pids:
             for pid in contained_pids:
                 votes[pid] = votes.get(pid, 0) + 1
-            continue  # نعطي أولوية للاحتواء، ما نروح للـ nearest هنا
+            continue  # لا نستخدم الأقرب إذا وجد احتواء
 
-        # 2) لو ما فيه احتواء، خذ أقرب مركز لكن بشرط نصف قطر منطقي
+        # أقرب مركز ضمن نصف قطر
         best_pid = None
         best_dist = float("inf")
         for pid, tr in frame_players.items():
@@ -133,11 +134,8 @@ def seed_target_from_first_k_frames(tracks_players, target_xy, K=15, contain_mar
         if best_pid is not None and best_dist <= nearest_max_radius:
             nearest_votes[best_pid] = nearest_votes.get(best_pid, 0) + 1
 
-    # قرار التصويت
     if votes:
-        # أعلى تصويت من الاحتواء
         pid0 = max(votes.items(), key=lambda kv: kv[1])[0]
-        # ارجع bbox من أول فريم ظهر فيه
         for f_idx in range(max_f):
             if pid0 in tracks_players[f_idx]:
                 return f_idx, pid0, tracks_players[f_idx][pid0]["bbox"]
@@ -380,7 +378,7 @@ def main():
             print("")
             print("--- ACTION COUNTING ERROR ---")
             for cls in DEFAULT_CLASS_NAMES:
-                print(f"{cls} = 0}")
+                print(f"{cls} = 0")
     elif target_id is None:
         print("ℹ️ No target ID set, skipping action recognition.")
         for cls in DEFAULT_CLASS_NAMES:
