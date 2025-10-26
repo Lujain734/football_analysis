@@ -70,10 +70,31 @@ def _feat_from_det(kpts_xyn: np.ndarray, box_xyxy: np.ndarray, H: int, W: int) -
 
 # ===== Safe YOLO call wrapper =====
 def yolo_infer(model: YOLO, img, conf: float, imgsz: int, max_det: int):
+    """
+    Unified YOLO inference that works with ultralytics 8.0.200+
+    Handles both direct call and predict() methods
+    """
     try:
-        return model(img, conf=conf, imgsz=imgsz, verbose=False, max_det=max_det)
-    except Exception:
-        return model.predict(img, conf=conf, imgsz=imgsz, save=False, verbose=False, max_det=max_det)
+        # Method 1: Direct call (most common)
+        results = model(img, conf=conf, imgsz=imgsz, verbose=False, max_det=max_det)
+        return results
+    except AttributeError as e1:
+        try:
+            # Method 2: Using predict() 
+            results = model.predict(img, conf=conf, imgsz=imgsz, save=False, verbose=False, max_det=max_det)
+            return results
+        except Exception as e2:
+            try:
+                # Method 3: Minimal parameters (fallback for older versions)
+                print(f"⚠️ YOLO inference using fallback method")
+                results = model(img, conf=conf, verbose=False)
+                return results
+            except Exception as e3:
+                # Method 4: Absolute minimal (last resort)
+                print(f"❌ All YOLO methods failed: {e1}, {e2}, {e3}")
+                print(f"⚠️ Using absolute minimal inference")
+                results = model(img)
+                return results
 
 # ===== Main API: return counts only =====
 def infer_action_counts(
@@ -100,7 +121,12 @@ def infer_action_counts(
     if not os.path.isfile(mlp_weights):
         raise FileNotFoundError(f"Missing MLP weights: {mlp_weights}")
 
+    # Load YOLO Pose model
+    print(f"📥 Loading YOLO Pose model from: {pose_weights}")
     yolo_pose = YOLO(pose_weights)
+    
+    # Load MLP model
+    print(f"📥 Loading MLP model from: {mlp_weights}")
     mlp = ActionMLP(num_classes=len(classes)).to(device)
     sd = torch.load(mlp_weights, map_location=device)
     if isinstance(sd, dict) and "state_dict" in sd:
@@ -115,14 +141,21 @@ def infer_action_counts(
         key=_natural_key
     )
 
-    for img_path in image_paths:
+    print(f"🔍 Found {len(image_paths)} crop images")
+    
+    for idx, img_path in enumerate(image_paths):
+        if idx % 50 == 0:
+            print(f"⏳ Processing crop {idx+1}/{len(image_paths)}...")
+            
         img = cv2.imread(img_path)
         if img is None:
             continue
 
+        # Run YOLO Pose inference
         results = yolo_infer(yolo_pose, img, conf=yolo_conf, imgsz=img_size, max_det=max_det)
         r = results[0]
 
+        # Check if we have valid detections
         if r.boxes is None or r.keypoints is None or len(r.boxes) == 0:
             continue
 
@@ -148,12 +181,17 @@ def infer_action_counts(
         records.append((frame_idx, probs, pred_name))
 
     if not records:
+        print("⚠️ No valid records found")
         return {c: 0 for c in classes}
 
     records.sort(key=lambda t: t[0])
     valid = [(fi, p) for (fi, p, name) in records if name != "no_action"]
+    
     if not valid:
+        print("⚠️ No actions detected (all no_action)")
         return {c: 0 for c in classes}
+
+    print(f"✅ Found {len(valid)} valid action frames")
 
     frame_idx_arr = np.array([fi for fi, _ in valid], dtype=np.int32)
     probs_arr     = np.stack([p for _, p in valid], axis=0)
@@ -187,4 +225,5 @@ def infer_action_counts(
         if lab in counts:
             counts[lab] += 1
 
+    print(f"📊 Action counts: {counts}")
     return counts
