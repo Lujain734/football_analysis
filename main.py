@@ -1,6 +1,3 @@
-Main 
-
-
 #!/usr/bin/env python3
 # main.py
 import os
@@ -381,3 +378,4 @@ if __name__ == "__main__":
         print("--- MAIN FUNCTION ERROR ---")
         for cls in DEFAULT_CLASS_NAMES:
             print(f"{cls} = 0")
+
