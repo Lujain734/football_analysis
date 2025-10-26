@@ -71,30 +71,18 @@ def _feat_from_det(kpts_xyn: np.ndarray, box_xyxy: np.ndarray, H: int, W: int) -
 # ===== Safe YOLO call wrapper =====
 def yolo_infer(model: YOLO, img, conf: float, imgsz: int, max_det: int):
     """
-    Unified YOLO inference that works with ultralytics 8.0.200+
-    Handles both direct call and predict() methods
+    YOLO inference compatible with ultralytics 8.2.103+
+    This version has better API stability
     """
     try:
-        # Method 1: Direct call (most common)
-        results = model(img, conf=conf, imgsz=imgsz, verbose=False, max_det=max_det)
+        # Primary method: direct call (works in 8.2.103+)
+        results = model(img, conf=conf, imgsz=imgsz, verbose=False)
         return results
-    except AttributeError as e1:
-        try:
-            # Method 2: Using predict() 
-            results = model.predict(img, conf=conf, imgsz=imgsz, save=False, verbose=False, max_det=max_det)
-            return results
-        except Exception as e2:
-            try:
-                # Method 3: Minimal parameters (fallback for older versions)
-                print(f"⚠️ YOLO inference using fallback method")
-                results = model(img, conf=conf, verbose=False)
-                return results
-            except Exception as e3:
-                # Method 4: Absolute minimal (last resort)
-                print(f"❌ All YOLO methods failed: {e1}, {e2}, {e3}")
-                print(f"⚠️ Using absolute minimal inference")
-                results = model(img)
-                return results
+    except Exception as e:
+        print(f"⚠️ YOLO inference fallback: {e}")
+        # Fallback: minimal parameters
+        results = model(img, verbose=False)
+        return results
 
 # ===== Main API: return counts only =====
 def infer_action_counts(
@@ -110,7 +98,7 @@ def infer_action_counts(
     min_seg_sec: float = 0.30,
     fps: float = 25.0
 ):
-    print(f"[infer_action_counts] ultralytics version: {ultralytics.__version__}")
+    print(f"[infer_action_counts] ultralytics version: {ultralytics.__version__} (recommended: 8.2.103+)")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     classes = class_names if class_names else DEFAULT_CLASS_NAMES
 
