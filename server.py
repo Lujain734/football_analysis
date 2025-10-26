@@ -25,7 +25,7 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # ================== Models ==================
-HF_REPO_ID = "lujain-721/haddaf-models"  # حسابك في هاجينغ فيس
+HF_REPO_ID = "lujain-721/haddaf-models"  # Your Hugging Face repo
 
 DETECTION_WEIGHTS = os.path.join(MODELS_DIR, "best.pt")
 POSE_WEIGHTS      = os.path.join(MODELS_DIR, "best1.pt")
@@ -144,6 +144,7 @@ def analyze_video():
     Form-data:
       - video: file
       - x, y: floats (target pixel coordinates)
+      - width, height: floats (original frame dimensions)
     """
     try:
         if "video" not in request.files:
@@ -152,15 +153,17 @@ def analyze_video():
         if not video_file.filename:
             return jsonify({"success": False, "error": "Empty filename"}), 400
 
-        # Coordinates
+        # Coordinates and dimensions
         try:
             x = float(request.form.get("x", 0))
             y = float(request.form.get("y", 0))
+            original_width = float(request.form.get("width", 0))
+            original_height = float(request.form.get("height", 0))
         except ValueError:
-            return jsonify({"success": False, "error": "Invalid x or y"}), 400
+            return jsonify({"success": False, "error": "Invalid x, y, width, or height"}), 400
 
         print(f"📹 Received: {video_file.filename}")
-        print(f"📍 Target pixel coords: x={x}, y={y}")
+        print(f"📍 Target pixel coords: x={x}, y={y}, original dimensions: {original_width}x{original_height}")
 
         # Working dir (always reset)
         work_dir = os.path.join(DEBUG_DIR, "current")
@@ -193,7 +196,9 @@ def analyze_video():
             "--max-det", "5",
             "--smooth-window", "7",
             "--min-seg-sec", "0.30",
-            "--iou-thr", "0.3" # <-- ADD THIS LINE (Experiment with 0.1, 0.15, 0.2)
+            "--iou-thr", "0.5",  # Increased IoU threshold
+            "--original-width", str(original_width),
+            "--original-height", str(original_height)
         ]
         print(f"🚀 Running: {' '.join(cmd)}")
 
@@ -300,8 +305,3 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
-
-
-
-
-
