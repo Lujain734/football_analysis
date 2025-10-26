@@ -53,24 +53,62 @@ def parse_args():
     return parser.parse_args()
 
 # --------------------- Utilities ---------------------
-def seed_target_from_first_k_frames(tracks_players, target_xy, K=10):
+def seed_target_from_first_k_frames(tracks_players, target_xy, K=10, max_distance=150):
+    """
+    Find the player closest to target coordinates.
+    
+    Args:
+        tracks_players: Player tracking data
+        target_xy: Target coordinates (x, y)
+        K: Number of frames to search
+        max_distance: Maximum distance threshold (pixels) - ignore players further than this
+    """
     if target_xy is None:
         return None, None, None
+    
+    print(f"🔍 DEBUG: Searching for player near coordinates: ({target_xy[0]:.2f}, {target_xy[1]:.2f})")
+    print(f"🔍 DEBUG: Maximum search distance: {max_distance} pixels")
     
     best = (None, None, None)
     best_dist = float("inf")
     max_f = min(K, len(tracks_players))
     
+    print(f"🔍 DEBUG: Checking first {max_f} frames")
+    
+    candidates = []  # Store all candidates with their distances
+    
     for f_idx in range(max_f):
+        print(f"\n📍 Frame {f_idx}: Found {len(tracks_players[f_idx])} players")
+        
         for pid, tr in tracks_players[f_idx].items():
             x1, y1, x2, y2 = tr["bbox"]
             cx = (x1 + x2) / 2.0
             cy = (y1 + y2) / 2.0
             d = np.hypot(cx - target_xy[0], cy - target_xy[1])
             
-            if d < best_dist:
-                best_dist = d
-                best = (f_idx, pid, tr["bbox"])
+            # Log each player
+            print(f"  Player ID {pid}: bbox=[{x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f}], center=({cx:.1f}, {cy:.1f}), distance={d:.1f}")
+            
+            # Store candidate if within max distance
+            if d <= max_distance:
+                candidates.append((f_idx, pid, tr["bbox"], d))
+                
+                if d < best_dist:
+                    best_dist = d
+                    best = (f_idx, pid, tr["bbox"])
+                    print(f"  ✅ NEW BEST: ID {pid}, distance={d:.1f}")
+            else:
+                print(f"  ❌ TOO FAR: Distance {d:.1f} > {max_distance}")
+    
+    if best[1] is not None:
+        print(f"\n🎯 FINAL SELECTION: Frame {best[0]}, Player ID {best[1]}, Distance={best_dist:.1f}, BBox={best[2]}")
+        print(f"📊 Total candidates found: {len(candidates)}")
+    else:
+        print(f"\n❌ NO PLAYER FOUND within {max_distance} pixels")
+        if candidates:
+            print(f"⚠️ Closest player was at distance {min(c[3] for c in candidates):.1f} pixels")
+        else:
+            print(f"⚠️ No players detected in the first {max_f} frames")
     
     return best
 
@@ -186,6 +224,41 @@ def main():
     target_xy = tuple(args.target_xy) if args.target_xy else None
     
     print(f"ℹ️ Trying to seed target using coords: {target_xy}")
+    
+    # 🔍 DEBUG: Draw target point on first frame
+    if target_xy and len(video_frames) > 0:
+        debug_frame = video_frames[0].copy()
+        tx, ty = int(target_xy[0]), int(target_xy[1])
+        
+        # Draw large red circle at target point
+        cv2.circle(debug_frame, (tx, ty), 20, (0, 0, 255), -1)
+        cv2.circle(debug_frame, (tx, ty), 22, (255, 255, 255), 2)
+        
+        # Draw all player bounding boxes in first frame
+        if len(tracks["players"]) > 0:
+            for pid, pdata in tracks["players"][0].items():
+                x1, y1, x2, y2 = map(int, pdata["bbox"])
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                
+                # Draw bbox
+                cv2.rectangle(debug_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                
+                # Draw player ID
+                cv2.putText(debug_frame, f"ID:{pid}", (x1, y1 - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Draw center point
+                cv2.circle(debug_frame, (cx, cy), 5, (255, 0, 0), -1)
+        
+        # Save debug frame
+        debug_path = os.path.join("debug_output", "coordinate_debug_frame0.jpg")
+        os.makedirs("debug_output", exist_ok=True)
+        cv2.imwrite(debug_path, debug_frame)
+        print(f"🖼️ DEBUG: Saved coordinate visualization to: {debug_path}")
+        print(f"   Red circle = Target point ({tx}, {ty})")
+        print(f"   Green boxes = Detected players")
+        print(f"   Blue dots = Player centers")
+        print("")
     
     if target_xy:
         f0, pid0, bbox0 = seed_target_from_first_k_frames(tracks["players"], target_xy, K=10)
