@@ -53,64 +53,117 @@ def parse_args():
     return parser.parse_args()
 
 # --------------------- Utilities ---------------------
-def seed_target_from_first_k_frames(tracks_players, target_xy, K=10, max_distance=150):
+def seed_target_from_first_k_frames(tracks_players, target_xy, K=30, max_distance=200):
     """
-    Find the player closest to target coordinates.
+    Find player whose bounding box contains the target point.
+    Falls back to closest player if no bbox contains the point.
     
     Args:
         tracks_players: Player tracking data
         target_xy: Target coordinates (x, y)
-        K: Number of frames to search
-        max_distance: Maximum distance threshold (pixels) - ignore players further than this
+        K: Number of frames to search (increased to 30)
+        max_distance: Maximum fallback distance
     """
     if target_xy is None:
         return None, None, None
     
-    print(f"🔍 DEBUG: Searching for player near coordinates: ({target_xy[0]:.2f}, {target_xy[1]:.2f})")
-    print(f"🔍 DEBUG: Maximum search distance: {max_distance} pixels")
+    tx, ty = target_xy[0], target_xy[1]
+    print(f"🔍 DEBUG: Searching for player at coordinates: ({tx:.2f}, {ty:.2f})")
+    print(f"🔍 DEBUG: Search strategy: 1) Inside bbox, 2) Closest within {max_distance}px")
+    
+    max_f = min(K, len(tracks_players))
+    print(f"🔍 DEBUG: Checking first {max_f} frames")
+    print("")
+    
+    # Phase 1: Look for player whose bbox contains the point
+    inside_candidates = []
+    
+    for f_idx in range(max_f):
+        frame_players = tracks_players[f_idx]
+        print(f"📍 Frame {f_idx}: {len(frame_players)} players")
+        
+        for pid, tr in frame_players.items():
+            x1, y1, x2, y2 = tr["bbox"]
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            
+            # Check if point is inside bbox
+            inside = (x1 <= tx <= x2) and (y1 <= ty <= y2)
+            
+            # Calculate distance to center
+            d = np.hypot(cx - tx, cy - ty)
+            
+            if inside:
+                inside_candidates.append((f_idx, pid, tr["bbox"], d))
+                print(f"  ✅ Player ID {pid}: INSIDE bbox=[{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}], dist={d:.1f}")
+            else:
+                print(f"     Player ID {pid}: outside bbox=[{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}], dist={d:.1f}")
+    
+    print("")
+    
+    # If we found players containing the point, pick the one from earliest frame
+    if inside_candidates:
+        # Sort by frame, then by distance
+        inside_candidates.sort(key=lambda x: (x[0], x[3]))
+        f_idx, pid, bbox, d = inside_candidates[0]
+        
+        print(f"🎯 PHASE 1 SUCCESS: Found {len(inside_candidates)} candidate(s) with point inside bbox")
+        print(f"🎯 SELECTED: Frame {f_idx}, Player ID {pid}, Distance from center={d:.1f}px")
+        print(f"   BBox: {bbox}")
+        print("")
+        
+        return (f_idx, pid, bbox)
+    
+    # Phase 2: Fallback to closest player within max_distance
+    print(f"⚠️ PHASE 1 FAILED: No player bbox contains the point ({tx:.2f}, {ty:.2f})")
+    print(f"⚠️ PHASE 2: Searching for closest player within {max_distance}px...")
+    print("")
     
     best = (None, None, None)
     best_dist = float("inf")
-    max_f = min(K, len(tracks_players))
-    
-    print(f"🔍 DEBUG: Checking first {max_f} frames")
-    
-    candidates = []  # Store all candidates with their distances
+    close_candidates = []
     
     for f_idx in range(max_f):
-        print(f"\n📍 Frame {f_idx}: Found {len(tracks_players[f_idx])} players")
-        
         for pid, tr in tracks_players[f_idx].items():
             x1, y1, x2, y2 = tr["bbox"]
             cx = (x1 + x2) / 2.0
             cy = (y1 + y2) / 2.0
-            d = np.hypot(cx - target_xy[0], cy - target_xy[1])
+            d = np.hypot(cx - tx, cy - ty)
             
-            # Log each player
-            print(f"  Player ID {pid}: bbox=[{x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f}], center=({cx:.1f}, {cy:.1f}), distance={d:.1f}")
-            
-            # Store candidate if within max distance
             if d <= max_distance:
-                candidates.append((f_idx, pid, tr["bbox"], d))
+                close_candidates.append((f_idx, pid, tr["bbox"], d))
                 
                 if d < best_dist:
                     best_dist = d
                     best = (f_idx, pid, tr["bbox"])
-                    print(f"  ✅ NEW BEST: ID {pid}, distance={d:.1f}")
-            else:
-                print(f"  ❌ TOO FAR: Distance {d:.1f} > {max_distance}")
     
     if best[1] is not None:
-        print(f"\n🎯 FINAL SELECTION: Frame {best[0]}, Player ID {best[1]}, Distance={best_dist:.1f}, BBox={best[2]}")
-        print(f"📊 Total candidates found: {len(candidates)}")
+        print(f"🎯 PHASE 2 SUCCESS: Found {len(close_candidates)} player(s) within {max_distance}px")
+        print(f"🎯 SELECTED CLOSEST: Frame {best[0]}, Player ID {best[1]}, Distance={best_dist:.1f}px")
+        print(f"   BBox: {best[2]}")
+        print("")
+        return best
     else:
-        print(f"\n❌ NO PLAYER FOUND within {max_distance} pixels")
-        if candidates:
-            print(f"⚠️ Closest player was at distance {min(c[3] for c in candidates):.1f} pixels")
-        else:
-            print(f"⚠️ No players detected in the first {max_f} frames")
-    
-    return best
+        print(f"❌ PHASE 2 FAILED: No players within {max_distance}px of ({tx:.2f}, {ty:.2f})")
+        
+        # Show closest player even if beyond threshold
+        all_distances = []
+        for f_idx in range(max_f):
+            for pid, tr in tracks_players[f_idx].items():
+                x1, y1, x2, y2 = tr["bbox"]
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                d = np.hypot(cx - tx, cy - ty)
+                all_distances.append((f_idx, pid, tr["bbox"], d))
+        
+        if all_distances:
+            all_distances.sort(key=lambda x: x[3])
+            f_idx, pid, bbox, d = all_distances[0]
+            print(f"ℹ️ Closest player anywhere: Frame {f_idx}, ID {pid}, Distance={d:.1f}px")
+            print(f"   Consider: 1) Checking coordinates, 2) Increasing max_distance, 3) Using earlier frames")
+        
+        print("")
+        return (None, None, None)
 
 def calculate_iou(a, b):
     ax1, ay1, ax2, ay2 = a
@@ -230,9 +283,15 @@ def main():
         debug_frame = video_frames[0].copy()
         tx, ty = int(target_xy[0]), int(target_xy[1])
         
-        # Draw large red circle at target point
-        cv2.circle(debug_frame, (tx, ty), 20, (0, 0, 255), -1)
-        cv2.circle(debug_frame, (tx, ty), 22, (255, 255, 255), 2)
+        # Draw crosshair at target point
+        crosshair_size = 30
+        cv2.line(debug_frame, (tx - crosshair_size, ty), (tx + crosshair_size, ty), (0, 0, 255), 3)
+        cv2.line(debug_frame, (tx, ty - crosshair_size), (tx, ty + crosshair_size), (0, 0, 255), 3)
+        cv2.circle(debug_frame, (tx, ty), 25, (0, 0, 255), 3)
+        
+        # Add coordinate text
+        cv2.putText(debug_frame, f"TARGET: ({tx}, {ty})", (tx + 35, ty - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         
         # Draw all player bounding boxes in first frame
         if len(tracks["players"]) > 0:
@@ -240,24 +299,52 @@ def main():
                 x1, y1, x2, y2 = map(int, pdata["bbox"])
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                 
-                # Draw bbox
-                cv2.rectangle(debug_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                # Check if target point is inside this bbox
+                inside = (x1 <= tx <= x2) and (y1 <= ty <= y2)
                 
-                # Draw player ID
-                cv2.putText(debug_frame, f"ID:{pid}", (x1, y1 - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                # Color: Green if inside, Blue if outside
+                color = (0, 255, 0) if inside else (255, 0, 0)
+                thickness = 4 if inside else 2
+                
+                # Draw bbox
+                cv2.rectangle(debug_frame, (x1, y1), (x2, y2), color, thickness)
+                
+                # Draw player ID with background
+                label = f"ID:{pid}" + (" *TARGET*" if inside else "")
+                (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                cv2.rectangle(debug_frame, (x1, y1 - label_h - 10), (x1 + label_w + 10, y1), color, -1)
+                cv2.putText(debug_frame, label, (x1 + 5, y1 - 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 
                 # Draw center point
-                cv2.circle(debug_frame, (cx, cy), 5, (255, 0, 0), -1)
+                cv2.circle(debug_frame, (cx, cy), 5, color, -1)
+                
+                # Draw distance line to target
+                cv2.line(debug_frame, (tx, ty), (cx, cy), (255, 255, 0), 1)
+                dist = np.hypot(cx - tx, cy - ty)
+                mid_x, mid_y = (tx + cx) // 2, (ty + cy) // 2
+                cv2.putText(debug_frame, f"{dist:.0f}px", (mid_x, mid_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+        
+        # Add legend
+        legend_y = 30
+        cv2.putText(debug_frame, "Legend:", (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.rectangle(debug_frame, (10, legend_y + 10), (30, legend_y + 30), (0, 255, 0), -1)
+        cv2.putText(debug_frame, "= Target INSIDE bbox", (35, legend_y + 27), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.rectangle(debug_frame, (10, legend_y + 40), (30, legend_y + 60), (255, 0, 0), -1)
+        cv2.putText(debug_frame, "= Other players", (35, legend_y + 57), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.circle(debug_frame, (20, legend_y + 80), 10, (0, 0, 255), 3)
+        cv2.putText(debug_frame, "= Click point", (35, legend_y + 87), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         # Save debug frame
         debug_path = os.path.join("debug_output", "coordinate_debug_frame0.jpg")
         os.makedirs("debug_output", exist_ok=True)
         cv2.imwrite(debug_path, debug_frame)
         print(f"🖼️ DEBUG: Saved coordinate visualization to: {debug_path}")
-        print(f"   Red circle = Target point ({tx}, {ty})")
-        print(f"   Green boxes = Detected players")
-        print(f"   Blue dots = Player centers")
+        print(f"   🔴 Red crosshair = Your click at ({tx}, {ty})")
+        print(f"   🟢 Green box = Player bbox contains your click")
+        print(f"   🔵 Blue box = Other players")
+        print(f"   Yellow lines = Distance from click to player center")
         print("")
     
     if target_xy:
