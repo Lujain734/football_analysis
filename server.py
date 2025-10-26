@@ -161,8 +161,12 @@ def analyze_video():
             return jsonify({"success": False, "error": "Invalid coordinates or dimensions"}), 400
 
         print(f"📹 Received: {video_file.filename}")
-        print(f"📍 Target pixel coords (original): x={x}, y={y}")
-        print(f"📐 Original video dimensions: {video_width}x{video_height}")
+        print(f"📍 Target pixel coords (from iOS): x={x}, y={y}")
+        print(f"📐 Video dimensions (from iOS): {video_width}x{video_height}")
+        print("")
+        print("=" * 60)
+        print("🔍 COORDINATE TRANSFORMATION DEBUG")
+        print("=" * 60)
 
         # Working dir
         work_dir = os.path.join(DEBUG_DIR, "current")
@@ -182,7 +186,8 @@ def analyze_video():
         actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
         
-        print(f"📐 Saved video dimensions: {actual_width}x{actual_height}")
+        print(f"📐 Actual saved video dimensions: {actual_width}x{actual_height}")
+        print("")
 
         # Calculate scale if main.py will downscale
         max_width = 960
@@ -190,43 +195,57 @@ def analyze_video():
         scale_y = 1.0
         
         if actual_width > max_width:
-            # main.py will downscale, so we need to adjust coordinates
+            # main.py will downscale
             scale_factor = max_width / float(actual_width)
             scaled_width = max_width
             scaled_height = int(actual_height * scale_factor)
-            print(f"⚠️ Video will be downscaled in main.py to {scaled_width}x{scaled_height} (scale: {scale_factor:.3f})")
+            print(f"⚙️ main.py will downscale to: {scaled_width}x{scaled_height}")
+            print(f"⚙️ Scale factor: {scale_factor:.4f}")
+            print("")
             
-            # Adjust coordinates based on original vs actual dimensions
+            # Step 1: Adjust from iOS view to actual video
             if video_width > 0 and video_height > 0:
-                # User sent coordinates based on their view, adjust to actual video first
                 x_actual = x * (actual_width / float(video_width))
                 y_actual = y * (actual_height / float(video_height))
-                print(f"📍 Adjusted to actual video: ({x_actual:.2f}, {y_actual:.2f})")
+                print(f"📍 Step 1 - iOS ({x:.1f}, {y:.1f}) → Actual video: ({x_actual:.1f}, {y_actual:.1f})")
+                print(f"   iOS dimensions: {video_width}x{video_height}")
+                print(f"   Actual dimensions: {actual_width}x{actual_height}")
+                print(f"   Scale: ({actual_width/float(video_width):.4f}, {actual_height/float(video_height):.4f})")
+                print("")
                 
-                # Then adjust for downscaling
+                # Step 2: Adjust for main.py downscaling
                 x_scaled = x_actual * scale_factor
                 y_scaled = y_actual * scale_factor
-                print(f"📍 After downscaling adjustment: ({x_scaled:.2f}, {y_scaled:.2f})")
+                print(f"📍 Step 2 - Actual ({x_actual:.1f}, {y_actual:.1f}) → Downscaled: ({x_scaled:.1f}, {y_scaled:.1f})")
+                print(f"   Downscale factor: {scale_factor:.4f}")
+                print("")
             else:
-                # No original dimensions provided, assume coordinates are for actual video
+                # No iOS dimensions, assume coords are for actual video
+                print(f"⚠️ No iOS dimensions provided, assuming coords are for actual video")
                 x_scaled = x * scale_factor
                 y_scaled = y * scale_factor
-                print(f"📍 Direct downscale adjustment: ({x_scaled:.2f}, {y_scaled:.2f})")
+                print(f"📍 Actual ({x:.1f}, {y:.1f}) → Downscaled: ({x_scaled:.1f}, {y_scaled:.1f})")
+                print("")
             
             final_x = x_scaled
             final_y = y_scaled
         else:
-            # No downscaling will happen
+            print(f"ℹ️ No downscaling needed (video width {actual_width} <= {max_width})")
+            # No downscaling
             if video_width > 0 and video_height > 0:
-                # Adjust from iOS view to actual video
                 final_x = x * (actual_width / float(video_width))
                 final_y = y * (actual_height / float(video_height))
-                print(f"📍 Adjusted coordinates: ({final_x:.2f}, {final_y:.2f})")
+                print(f"📍 iOS ({x:.1f}, {y:.1f}) → Actual: ({final_x:.1f}, {final_y:.1f})")
             else:
                 final_x = x
                 final_y = y
+                print(f"📍 Using original coords: ({final_x:.1f}, {final_y:.1f})")
+            print("")
 
-        print(f"🎯 Final coordinates for main.py: ({final_x:.2f}, {final_y:.2f})")
+        print("=" * 60)
+        print(f"🎯 FINAL COORDINATES FOR MAIN.PY: ({final_x:.2f}, {final_y:.2f})")
+        print("=" * 60)
+        print("")
 
         # Crops dir
         crops_dir = os.path.join(work_dir, "crops")
