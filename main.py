@@ -52,12 +52,22 @@ def parse_args():
     return parser.parse_args()
 
 # --------------------- Utilities ---------------------
-def seed_target_from_first_k_frames(tracks_players, target_xy, K=10):
+# In main.py
+
+def seed_target_from_first_k_frames(tracks_players, target_xy, K=10): # K is now ignored
     if target_xy is None:
         return None, None, None
     best = (None, None, None)
     best_dist = float("inf")
-    max_f = min(K, len(tracks_players))
+    # max_f = min(K, len(tracks_players)) # <<< OLD LINE
+    max_f = 1 # <<< NEW LINE: Force check only the first frame (index 0)
+
+    # Ensure tracks_players has at least one frame
+    if len(tracks_players) == 0:
+         print("⚠️ Warning: tracks_players is empty in seed_target function.")
+         return None, None, None
+
+    # Loop will only run for f_idx = 0
     for f_idx in range(max_f):
         # Ensure tracks_players[f_idx] is a dictionary
         if not isinstance(tracks_players[f_idx], dict):
@@ -66,23 +76,29 @@ def seed_target_from_first_k_frames(tracks_players, target_xy, K=10):
         for pid, tr in tracks_players[f_idx].items():
             # Ensure 'bbox' key exists and is valid
             if 'bbox' not in tr or not isinstance(tr['bbox'], (list, tuple)) or len(tr['bbox']) != 4:
-                print(f"⚠️ Warning: Invalid bbox for pid {pid} in frame {f_idx}: {tr.get('bbox')}")
+                # print(f"⚠️ Warning: Invalid bbox for pid {pid} in frame {f_idx}: {tr.get('bbox')}") # Optional Debug
                 continue
             x1, y1, x2, y2 = tr["bbox"]
             # Ensure coordinates are numbers
             if not all(isinstance(coord, (int, float)) for coord in [x1, y1, x2, y2]):
-                 print(f"⚠️ Warning: Non-numeric bbox coords for pid {pid} in frame {f_idx}: {[x1, y1, x2, y2]}")
+                 # print(f"⚠️ Warning: Non-numeric bbox coords for pid {pid} in frame {f_idx}: {[x1, y1, x2, y2]}") # Optional Debug
                  continue
             # Ensure bbox has positive width/height
             if x1 >= x2 or y1 >= y2:
-                print(f"⚠️ Warning: Zero/negative area bbox for pid {pid} in frame {f_idx}: {[x1, y1, x2, y2]}")
+                # print(f"⚠️ Warning: Zero/negative area bbox for pid {pid} in frame {f_idx}: {[x1, y1, x2, y2]}") # Optional Debug
                 continue
             cx = (x1 + x2) / 2.0
             cy = (y1 + y2) / 2.0
             d = np.hypot(cx - target_xy[0], cy - target_xy[1])
             if d < best_dist:
                 best_dist = d
-                best = (f_idx, pid, tr["bbox"])
+                best = (f_idx, pid, tr["bbox"]) # f_idx will always be 0 here now
+
+    # Add a check here: if no player was found in frame 0, return None
+    if best == (None, None, None):
+        print(f"⚠️ No suitable player found in frame 0 near coords {target_xy}")
+        return None, None, None
+
     return best
 
 def calculate_iou(a, b):
@@ -422,3 +438,4 @@ if __name__ == "__main__":
         print("\n--- MAIN FUNCTION ERROR ---")
         for cls in DEFAULT_CLASS_NAMES:
              print(f"{cls} = 0")
+
