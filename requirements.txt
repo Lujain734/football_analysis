@@ -5,9 +5,10 @@ flask==3.0.0
 flask-cors==4.0.0
 gunicorn==21.2.0
 
-# Computer Vision
-ultralytics==8.0.200
+# Computer Vision (Updated for compatibility)
+ultralytics==8.2.103
 supervision==0.16.0
+opencv-python-headless==4.8.1.78
 pillow==10.1.0
 
 # Deep Learning
@@ -22,3 +23,4 @@ scipy==1.11.3
 
 # Utilities
 huggingface_hub==0.22.2
+pyyaml==6.0.1
