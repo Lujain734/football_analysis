@@ -11,7 +11,6 @@ from team_assigner import TeamAssigner
 from player_ball_assigner import PlayerBallAssigner
 from camera_movement_estimator import CameraMovementEstimator
 from view_transformer import ViewTransformer
-# Action counting
 from action_recognizer import infer_action_counts, DEFAULT_CLASS_NAMES
 
 # ------------------------ CLI ------------------------
@@ -31,7 +30,7 @@ def parse_args():
                         help="Output crop size (square)")
     parser.add_argument("--iou-thr", type=float, default=0.3,
                         help="IoU threshold for ID fallback continuity")
-    
+
     # Pose/MLP weights + counting params
     parser.add_argument("--pose-weights", type=str, default=r"models/best1.pt",
                         help="Path to YOLOv8 Pose weights")
@@ -48,29 +47,10 @@ def parse_args():
     parser.add_argument("--smooth-window", type=int, default=7,
                         help="Smoothing window length over probabilities")
     parser.add_argument("--min-seg-sec", type=float, default=0.30,
-        help="Minimum duration (sec) for an action segment to be counted")
+                        help="Minimum duration (sec) for an action segment to be counted")
     return parser.parse_args()
 
 # --------------------- Utilities ---------------------
-def seed_target_from_first_k_frames(tracks_players, target_xy, K=10):
-    if target_xy is None:
-        return None, None, None
-    
-    best = (None, None, None)
-    best_dist = float("inf")
-    max_f = min(K, len(tracks_players))
-    
-    for f_idx in range(max_f):
-        for pid, tr in tracks_players[f_idx].items():
-            x1, y1, x2, y2 = tr["bbox"]
-            cx = (x1 + x2) / 2.0
-            cy = (y1 + y2) / 2.0
-            d = np.hypot(cx - target_xy[0], cy - target_xy[1])
-            if d < best_dist:
-                best_dist = d
-                best = (f_idx, pid, tr["bbox"])
-    return best
-
 def calculate_iou(a, b):
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
@@ -78,8 +58,7 @@ def calculate_iou(a, b):
     ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
     iw = max(0, ix2 - ix1); ih = max(0, iy2 - iy1)
     inter = iw * ih
-    if inter <= 0:
-        return 0.0
+    if inter <= 0: return 0.0
     area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
     area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
     denom = area_a + area_b - inter
@@ -104,10 +83,76 @@ def enlarge_bbox(bbox, zoom=2.7, W=None, H=None, pad_px=40):
     if ny2 <= ny1: ny2 = min(H - 1, ny1 + 1)
     return [nx1, ny1, nx2, ny2]
 
+def point_in_bbox_with_margin(px, py, bbox, margin=20):
+    x1, y1, x2, y2 = bbox
+    return (px >= x1 - margin and px <= x2 + margin and
+            py >= y1 - margin and py <= y2 + margin)
+
+def seed_target_from_first_k_frames(tracks_players, target_xy, K=15, contain_margin=24, nearest_max_radius=120):
+    """
+    يختار ID اللاعب بالتصويت عبر أول K فريمات:
+    1) أولاً من تحتوي إحداثيات النقرة داخل صندوقه (مع هامش).
+    2) إن لم يوجد، أقرب مركز ضمن نصف قطر معقول.
+    """
+    if target_xy is None:
+        return None, None, None
+
+    tx, ty = target_xy
+    votes = {}          # pid -> count
+    nearest_votes = {}  # pid -> count (في حالة عدم الاحتواء)
+
+    max_f = min(K, len(tracks_players))
+
+    for f_idx in range(max_f):
+        frame_players = tracks_players[f_idx]
+        if not frame_players: 
+            continue
+
+        # 1) ابحث عن أي صندوق يحتوي النقطة (مع هامش)
+        contained_pids = []
+        for pid, tr in frame_players.items():
+            if point_in_bbox_with_margin(tx, ty, tr["bbox"], margin=contain_margin):
+                contained_pids.append(pid)
+
+        if contained_pids:
+            for pid in contained_pids:
+                votes[pid] = votes.get(pid, 0) + 1
+            continue  # نعطي أولوية للاحتواء، ما نروح للـ nearest هنا
+
+        # 2) لو ما فيه احتواء، خذ أقرب مركز لكن بشرط نصف قطر منطقي
+        best_pid = None
+        best_dist = float("inf")
+        for pid, tr in frame_players.items():
+            x1, y1, x2, y2 = tr["bbox"]
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            d = np.hypot(cx - tx, cy - ty)
+            if d < best_dist:
+                best_dist = d
+                best_pid = pid
+        if best_pid is not None and best_dist <= nearest_max_radius:
+            nearest_votes[best_pid] = nearest_votes.get(best_pid, 0) + 1
+
+    # قرار التصويت
+    if votes:
+        # أعلى تصويت من الاحتواء
+        pid0 = max(votes.items(), key=lambda kv: kv[1])[0]
+        # ارجع bbox من أول فريم ظهر فيه
+        for f_idx in range(max_f):
+            if pid0 in tracks_players[f_idx]:
+                return f_idx, pid0, tracks_players[f_idx][pid0]["bbox"]
+    elif nearest_votes:
+        pid0 = max(nearest_votes.items(), key=lambda kv: kv[1])[0]
+        for f_idx in range(max_f):
+            if pid0 in tracks_players[f_idx]:
+                return f_idx, pid0, tracks_players[f_idx][pid0]["bbox"]
+
+    return None, None, None
+
 # ------------------------ Main ------------------------
 def main():
     args = parse_args()
-    
+
     # Read all frames
     video_frames = read_video(args.video_path)
     if len(video_frames) == 0:
@@ -120,12 +165,12 @@ def main():
     # Downscale frames to reduce RAM usage
     first_h, first_w = orig_h, orig_w
     max_w = 960
-    scale = 1.0  # will be used to scale (x,y) consistently
+    scale = 1.0
 
     if first_w > max_w:
         scaled = []
         scale = max_w / float(first_w)
-        print(f"ℹ️ Downscaling frames from {first_w}px width to {max_w}px (scale: {scale:.2f})")
+        print(f"ℹ️ Downscaling frames from {first_w}px width to {max_w}px (scale: {scale:.4f})")
         for fr in video_frames:
             h, w = fr.shape[:2]
             fr = cv2.resize(fr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
@@ -149,9 +194,8 @@ def main():
     cap.release()
     print(f"ℹ️ Video FPS: {fps:.2f}")
 
-    # -------- Convert incoming target_xy to scaled frame space --------
+    # -------- تحويل target_xy لمساحة الإطارات المصغّرة --------
     def to_pixel_xy(raw_xy, ow, oh):
-        """Accepts normalized [0..1] or absolute pixels; returns pixels on original size."""
         x, y = raw_xy
         if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
             return (x * ow, y * oh)  # normalized input
@@ -162,10 +206,8 @@ def main():
     target_xy = tuple(args.target_xy) if args.target_xy else None
 
     if target_xy:
-        # 1) convert possibly-normalized to original pixels
-        tx, ty = to_pixel_xy(target_xy, orig_w, orig_h)
-        # 2) apply the same downscale factor used for frames
-        tx_scaled, ty_scaled = tx * scale, ty * scale
+        tx, ty = to_pixel_xy(target_xy, orig_w, orig_h)   # على أبعاد الفيديو الأصلية
+        tx_scaled, ty_scaled = tx * scale, ty * scale     # نفس مقياس الإطارات
         target_xy = (tx_scaled, ty_scaled)
         print(f"🎯 Target XY (orig): ({tx:.1f}, {ty:.1f}) -> (scaled): ({tx_scaled:.1f}, {ty_scaled:.1f})")
     else:
@@ -182,17 +224,23 @@ def main():
     tracker.add_position_to_tracks(tracks)
     print("✅ Tracking complete.")
 
-    # Seed target
+    # Seed target (التصويت + احتواء النقطة)
     print(f"ℹ️ Trying to seed target using coords: {target_xy}")
     if target_xy:
-        f0, pid0, bbox0 = seed_target_from_first_k_frames(tracks["players"], target_xy, K=10)
+        f0, pid0, bbox0 = seed_target_from_first_k_frames(
+            tracks["players"],
+            target_xy,
+            K=15,                # أول 15 فريم
+            contain_margin=24,   # هامش احتواء
+            nearest_max_radius=120  # نصف قطر لأقرب مركز
+        )
         if pid0 is not None:
             target_id = pid0
             last_bbox = bbox0
             print(f"🎯 Target player ID: {target_id} (seeded from frame {f0} using bbox {bbox0})")
             print(f"✅✅✅ INITIAL TARGET ID SEEDED AS: {target_id} ✅✅✅")
         else:
-            print("❌ No player found near the provided --target-xy in the first 10 frames.")
+            print("❌ No player found near the provided --target-xy in the first frames.")
             print(f"❌❌❌ FAILED TO SEED INITIAL TARGET ID FROM COORDS {target_xy} ❌❌❌")
     else:
         print("⚠️ No --target-xy provided, cannot track a specific player.")
@@ -332,7 +380,7 @@ def main():
             print("")
             print("--- ACTION COUNTING ERROR ---")
             for cls in DEFAULT_CLASS_NAMES:
-                print(f"{cls} = 0")
+                print(f"{cls} = 0}")
     elif target_id is None:
         print("ℹ️ No target ID set, skipping action recognition.")
         for cls in DEFAULT_CLASS_NAMES:
