@@ -87,6 +87,11 @@ def serve_crop(filename):
     crops_path = os.path.join(DEBUG_DIR, "current", "crops")
     return send_from_directory(crops_path, filename)
 
+@app.route("/debug-image/current")
+def serve_debug_image():
+    debug_path = os.path.join(DEBUG_DIR, "current")
+    return send_from_directory(debug_path, "debug_frame0.jpg")
+
 @app.route("/view-crops/current")
 def view_crops():
     crops_path = os.path.join(DEBUG_DIR, "current", "crops")
@@ -328,6 +333,17 @@ def analyze_video():
             crop_count = len(crop_files)
         print(f"📸 Total crops: {crop_count}")
         
+        # Check for debug image
+        debug_image_path = os.path.join(work_dir, "coordinate_debug_frame0.jpg")
+        debug_image_url = None
+        if os.path.exists(debug_image_path):
+            # Copy to a web-accessible location
+            debug_web_path = os.path.join(DEBUG_DIR, "current", "debug_frame0.jpg")
+            os.makedirs(os.path.dirname(debug_web_path), exist_ok=True)
+            shutil.copy(debug_image_path, debug_web_path)
+            debug_image_url = f"{request.host_url.rstrip('/')}/debug-image/current"
+            print(f"🖼️ Debug image available at: {debug_image_url}")
+        
         base_url = request.host_url.rstrip("/")
         crops_url = f"{base_url}/view-crops/current"
         print(f"🌐 View crops at: {crops_url}")
@@ -347,6 +363,7 @@ def analyze_video():
                 "processed": f"{max_width if actual_width > max_width else actual_width}x{int(actual_height * (max_width/actual_width)) if actual_width > max_width else actual_height}"
             },
             "crops_url": crops_url,
+            "debug_image_url": debug_image_url,
             "total_crops": crop_count,
             "timestamp": datetime.now().isoformat()
         })
